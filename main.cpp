@@ -2,7 +2,6 @@
 //  main.cpp
 //  BTC2NoSQL
 //
-//  Created by Chen Zhao on 8/31/16.
 //
 //
 
