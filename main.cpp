@@ -26,12 +26,12 @@ int main (int argc, char *argv[])
     BSON_APPEND_UTF8 (doc, "aa?", "hoho!");
     */
     
-    bson_new_from_json ((const uint8_t *)"{\"a\":1}", -1, &error);
-    if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, doc, NULL, &error)) {
+    bson_t *new_doc = bson_new_from_json ((const uint8_t *)"{\"aa???\":\"wwwwwwwwww\"}", -1, &error);
+    if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, new_doc, NULL, &error)) {
         fprintf (stderr, "%s\n", error.message);
     }
     
-    bson_destroy (doc);
+    //bson_destroy (doc);
     mongoc_collection_destroy (collection);
     mongoc_client_destroy (client);
     mongoc_cleanup ();
