@@ -1,6 +1,15 @@
+<<<<<<< HEAD
 #include <bson.h>
 #include <mongoc.h>
 #include <stdio.h>
+=======
+//
+//  main.cpp
+//  BTC2NoSQL
+//
+//
+//
+>>>>>>> a0b0fb76dedfdef99193ee411aa1a2e64edaecbf
 
 
 //g++ -o main main.cpp -l curl $(pkg-config --cflags --libs libmongoc-1.0) -std=c++11
