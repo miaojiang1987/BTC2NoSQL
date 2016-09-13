@@ -9,13 +9,12 @@ int main (int argc, char *argv[])
 {
     mongoc_client_t *client;
     mongoc_collection_t *collection;
-    mongoc_cursor_t *cursor;
+    //mongoc_cursor_t *cursor;
     bson_error_t error;
-    bson_oid_t oid;
+    //bson_oid_t oid;
     //bson_t *doc;
     
     mongoc_init ();
-    
     client = mongoc_client_new ("mongodb://localhost:27017/");
     collection = mongoc_client_get_collection (client, "mydb", "mycoll");
     
