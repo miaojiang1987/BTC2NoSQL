@@ -3,86 +3,88 @@
 #include <mongoc.h>
 #include <stdio.h>
 
+#include <iostream>
+#include <string>
+#include <vector>
+
 
 //g++ -o main main.cpp -l curl $(pkg-config --cflags --libs libmongoc-1.0) -std=c++11
+using namespace std;
 
-void bulk_test()
-{
+class MongoAgent {
     mongoc_client_t *client;
     mongoc_collection_t *collection;
-    
-    mongoc_init ();
-    
-    client = mongoc_client_new ("mongodb://localhost:27017/");
-    collection = mongoc_client_get_collection (client, "mydb", "mycoll");
-    
-    mongoc_bulk_operation_t *bulk;
     bson_error_t error;
-    bson_t *doc;
-    bson_t reply;
-    char *str;
-    bool ret;
-    int i;
+    bson_t cmd_reply;
+    const char *CMD_CREATE_INDEX = "{\"createIndexes\":\"mycoll\", \"indexes\":[{\"key\":{\"i\": 1},\"name\":\"i\",\"unique\":true}]}";
     
-    bulk = mongoc_collection_create_bulk_operation (collection, true, NULL);
-    
-    for (i = 0; i < 10000; i++) {
-        doc = BCON_NEW ("i", BCON_INT32 (i));
-        mongoc_bulk_operation_insert (bulk, doc);
-        bson_destroy (doc);
+    string runCmd(const string &cmd) {
+        bson_t *command = bson_new_from_json((const uint8_t *)cmd.c_str(), -1, &error);
+        string retVal;
+        if (mongoc_collection_command_simple(collection, command, NULL, &cmd_reply, &error)) {
+            char *str = bson_as_json (&cmd_reply, NULL);
+            retVal.insert(0, str);
+            bson_free (str);
+        } else {
+            fprintf (stderr, "Failed to run command: %s\n", error.message);
+        }
+        bson_destroy(command);
+        return retVal;
     }
     
-    ret = mongoc_bulk_operation_execute (bulk, &reply, &error);
-    
-    str = bson_as_json (&reply, NULL);
-    printf ("%s\n", str);
-    bson_free (str);
-    
-    if (!ret) {
-        fprintf (stderr, "Error: %s\n", error.message);
+public:
+    MongoAgent(const string &url, const string &db, const string &clt) {
+        mongoc_init ();
+        client = mongoc_client_new (url.c_str());
+        collection = mongoc_client_get_collection(client, db.c_str(), clt.c_str());
+        runCmd(CMD_CREATE_INDEX);
+        
     }
     
-    bson_destroy (&reply);
-    mongoc_bulk_operation_destroy (bulk);
+    void insert(const string &doc) {
+        bson_t *new_doc = bson_new_from_json ((const uint8_t *)doc.c_str(), -1, &error);
+        if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, new_doc, NULL, &error)) {
+            fprintf (stderr, "%s\n", error.message);
+        }
+        bson_destroy(new_doc);
+    }
     
-    mongoc_collection_destroy (collection);
-    mongoc_client_destroy (client);
+    void bulk_insert(const vector<bson_t *> &docs) {
+        mongoc_bulk_operation_t *bulk = mongoc_collection_create_bulk_operation(collection, true, NULL);
+        bson_t reply;
+        for (bson_t *doc: docs) {
+            mongoc_bulk_operation_insert(bulk, doc);
+        }
+        if (!mongoc_bulk_operation_execute(bulk, &reply, &error)) {
+            fprintf (stderr, "Error: %s\n", error.message);
+        }
+        mongoc_bulk_operation_destroy(bulk);
+        bson_destroy (&reply);
+    }
     
-    mongoc_cleanup ();
-    
-}
+    virtual ~MongoAgent() {
+        mongoc_collection_destroy (collection);
+        mongoc_client_destroy (client);
+        mongoc_cleanup ();
+    }
+};
+
+
 
 int main (int argc, char *argv[])
 {
-    mongoc_client_t *client;
-    mongoc_collection_t *collection;
-    //mongoc_cursor_t *cursor;
-    bson_error_t error;
-    //bson_oid_t oid;
-    //bson_t *doc;
-    
-    mongoc_init ();
-    client = mongoc_client_new ("mongodb://localhost:27017/");
-    collection = mongoc_client_get_collection (client, "mydb", "mycoll");
-    
-    
-    //doc = bson_new ();
-    //bson_oid_init (&oid, NULL);
-    //BSON_APPEND_OID (doc, "_id", &oid);
-    //BSON_APPEND_UTF8 (doc, "aa?", "hoho!");
-    
-    
-    bson_t *new_doc = bson_new_from_json ((const uint8_t *)"{\"aa???\":\"wwwwwwwwww\"}", -1, &error);
-    if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, new_doc, NULL, &error)) {
-        fprintf (stderr, "%s\n", error.message);
+    MongoAgent mAgent("mongodb://localhost:27017/", "mydb", "mycoll");
+    vector<bson_t *> docs;
+    for (int i = 0; i < 10; i++) {
+        bson_t *doc = BCON_NEW ("i", BCON_INT32 (i));
+        docs.push_back(doc);
     }
-    
-    //bson_destroy (doc);
-    mongoc_collection_destroy (collection);
-    mongoc_client_destroy (client);
-    mongoc_cleanup ();
-    bulk_test();
+    mAgent.bulk_insert(docs);
+    for(bson_t *doc: docs)
+        bson_destroy(doc);
+
     return 0;
+    
 }
 
 

@@ -6,6 +6,9 @@
 #include <sstream>
 #include <curl/curl.h>
 #include <string>
+#include <bson.h>
+#include <mongoc.h>
+#include <vector>
 
 #include "rapidjson/document.h"
 #include "rapidjson/writer.h"
@@ -84,18 +87,19 @@ public:
               <<height<<"]}";
         feedback_buffer.clear();
         send_raw_req(ss_req.str());
+        
         Document json;
         json.Parse(feedback_buffer.c_str());
         Value& blockhash = json["result"];
         return blockhash.GetString();
     }
     
-    static string getblock(unsigned int height) {
+    static Value getblock(unsigned int height) {
         
         string blockhash = getblockhash(height);
         stringstream ss_req;
         ss_req<<"{\"jsonrpc\": \"1.0\", \"id\":\"getblock\", \"method\": \"getblock\", \"params\": [\""
-              <<blockhash<<"\"]}";
+        <<blockhash<<"\"]}";
         feedback_buffer.clear();
         send_raw_req(ss_req.str());
         
@@ -104,14 +108,10 @@ public:
         assert(json["result"].IsObject());
         Value v = json["result"].GetObject();
         
-        StringBuffer bf;
-        PrettyWriter<StringBuffer> writer(bf);
-        v.Accept(writer);
-        return bf.GetString();
+        return v;
     }
     
-    
-    static string gettx(const string &txID) {
+    static Value gettx(const string &txID) {
         
         stringstream ss_req;
         ss_req<<"{\"jsonrpc\": \"1.0\", \"id\":\"gettx\", \"method\": \"getrawtransaction\", \"params\": [\""
@@ -124,11 +124,8 @@ public:
         assert(json["result"].IsObject());
         Value v = json["result"].GetObject();
         v.RemoveMember("hex");
-        
-        StringBuffer bf;
-        PrettyWriter<StringBuffer> writer(bf);
-        v.Accept(writer);
-        return bf.GetString();
+
+        return v;
     }
     
 };
@@ -140,14 +137,108 @@ char *RPCAgent::userpwd;
 string RPCAgent::feedback_buffer;
 CURL *RPCAgent::curl;
 
+class MongoAgent {
+    mongoc_client_t *client;
+    mongoc_collection_t *collection;
+    bson_error_t error;
+    bson_t cmd_reply;
+    const string db_name;
+    const string clt_name;
+    const string key_name;
+    
+    string runCmd(const string &cmd) {
+        bson_t *command = bson_new_from_json((const uint8_t *)cmd.c_str(), -1, &error);
+        string retVal;
+        if (mongoc_collection_command_simple(collection, command, NULL, &cmd_reply, &error)) {
+            char *str = bson_as_json (&cmd_reply, NULL);
+            retVal.insert(0, str);
+            bson_free (str);
+        } else {
+            fprintf (stderr, "Failed to run command: %s\n", error.message);
+        }
+        bson_destroy(command);
+        return retVal;
+    }
+    
+public:
+    MongoAgent(const string &url, const string &db, const string &clt, const string &key):
+    db_name(db), clt_name(clt), key_name(key)  {
+        mongoc_init ();
+        client = mongoc_client_new (url.c_str());
+        collection = mongoc_client_get_collection(client, db.c_str(), clt.c_str());
+        const string CMD_CREATE_INDEX = "{\"createIndexes\":\"" + clt + "\", \"indexes\":[{\"key\":{\"" + key_name
+            + "\": 1},\"name\":\"" + key_name + "\",\"unique\":true}]}";
+        runCmd(CMD_CREATE_INDEX);
+    }
+    
+    void insert(const string &doc) {
+        bson_t *new_doc = bson_new_from_json ((const uint8_t *)doc.c_str(), -1, &error);
+        if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, new_doc, NULL, &error)) {
+            fprintf (stderr, "%s\n", error.message);
+        }
+        bson_destroy(new_doc);
+    }
+    
+    void bulk_insert(const vector<string> &docs) {
+        mongoc_bulk_operation_t *bulk = mongoc_collection_create_bulk_operation(collection, true, NULL);
+        bson_t reply;
+        for (const string &doc: docs) {
+            bson_t *new_doc = bson_new_from_json ((const uint8_t *)doc.c_str(), -1, &error);
+            mongoc_bulk_operation_insert(bulk, new_doc);
+            bson_destroy(new_doc);
+        }
+        if (!mongoc_bulk_operation_execute(bulk, &reply, &error)) {
+            fprintf (stderr, "Error: %s\n", error.message);
+        }
+        mongoc_bulk_operation_destroy(bulk);
+        bson_destroy (&reply);
+    }
+    
+    virtual ~MongoAgent() {
+        mongoc_collection_destroy (collection);
+        mongoc_client_destroy (client);
+        mongoc_cleanup ();
+    }
+};
+
+
+string json_dumps(const Value &v) {
+    StringBuffer bf;
+    PrettyWriter<StringBuffer> writer(bf);
+    v.Accept(writer);
+    return bf.GetString();
+}
+
+vector<string> get_tx_list(const Value &block) {
+    assert(block["tx"].IsArray());
+    vector<string> retVal;
+    for (SizeType i = 0; i < block["tx"].Size(); i++) // Uses SizeType instead of size_t
+        retVal.push_back(block["tx"][i].GetString());
+    return retVal;
+}
+
+
 int main()
 {
     RPCAgent::init("Ulysseys",
                    "YourSuperGreatPasswordNumber_DO_NOT_USE_THIS_OR_YOU_WILL_GET_ROBBED",
                    "http://127.0.0.1:8332/");
-
-    string ans = RPCAgent::gettx("bcb887acb2c01b6c5c8b92c22a368135d207f07a26eff170fe730b1cd40d2547");
-    cout<<ans<<endl;
+    MongoAgent mAgent1("mongodb://localhost:27017/", "mydb", "mycoll1", "height");
+    MongoAgent mAgent2("mongodb://localhost:27017/", "mydb", "mycoll2", "txid");
+    
+    
+    for(int i=100;i<200;i++) {
+        Value block = RPCAgent::getblock(i);
+        vector<string> list = get_tx_list(block);
+        mAgent1.insert(json_dumps(block));
+        vector<string> tx;
+        for(string &l: list)
+            tx.push_back(json_dumps(RPCAgent::gettx(l)));
+        mAgent2.bulk_insert(tx);
+    }
+    RPCAgent::clean();
 
     return 0;
 }
+
+
